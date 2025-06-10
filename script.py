@@ -16,12 +16,12 @@ def initialise_log():
     """
     # Create csv for pages
     startTimestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    attach_report_log = f"approval_report_log_{startTimestamp}.csv"
     page_log = f"page_log_{startTimestamp}.csv"
+    output_report = f"output_report_{startTimestamp}.csv"
 
     LOG_DEFS = {
-         attach_report_log : ["timestamp", "url", "page_id", "success", "comment"],
-         page_log : ["timestamp", "url", "page_id", "status", "comment"]
+         page_log : ["timestamp", "url", "pageId", "status", "comment"],
+         output_report : ["pageId", "url", "pageStatus", "pageApproversCount", "quorum", "allApprovers",  "approversWhoHaveApproved", "expireAfter", "expiryDay", "expiryMonth"]
     }
 
     for filename, headers in LOG_DEFS.items():
@@ -29,14 +29,18 @@ def initialise_log():
             writer = csv.writer(f)
             writer.writerow(headers)
     
-    return attach_report_log, page_log
+    return page_log, output_report
 
-def append_to_log(filename, page_id, data):
+def append_to_log(filename, pageId, data, is_output_report=False):
     """
     """
-    timeNow = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    url = f"https://confluence.service.anz/pages/viewpage.action?pageId={page_id} "
-    log_entry = [timeNow, url, page_id] + data
+    url = f"https://confluence.service.anz/pages/viewpage.action?pageId={pageId} "
+    if is_output_report == False:
+        timeNow = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = [timeNow, url, pageId] + data
+    else:
+        log_entry = [pageId, url] + data
+    
     with open(filename, mode='a', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(log_entry)
@@ -54,61 +58,59 @@ def get_credentials():
     # password = input("Enter your Confluence password: ") # for api key
     return username, password
 
-def attach_approval_report(page_id, attach_report_log, AUTH):
+def attach_approval_report(pageId, page_log, AUTH):
     # Attach approval macro report to page
-    url = f"https://confluence.service.anz/rest/pageApprovals/1/report/attachCSV/{page_id}"
+    url = f"https://confluence.service.anz/rest/pageApprovals/1/report/attachCSV/{pageId}"
 
     response = requests.post(url, headers = {"X-Atlassian-Token": "no-check"}, auth=AUTH, verify=False)
 
-    if response.status_code == 200 or response.status_code == 201:
-        append_to_log(attach_report_log, page_id, ["Success"])
-    else:
-        append_to_log(attach_report_log, page_id, [f"Failed with status code {response.status_code}: {response.text}"])
+    if response.status_code != 200 and response.status_code != 201:
+        append_to_log(page_log, pageId, ["Failed", "Could not attach page approval report", f"Status code: {response.status_code}"])
 
-def get_page_approval_macro(ns, tree, page_id, page_log):
+def get_page_approval_macro(ns, tree, pageId, page_log):
     # f  the page approval macro and get all the approvers
         # //ac means it searches at every depth, /ac would only search at the root level
         approval_macro_list = tree.xpath("//ac:structured-macro[@ac:name='pageapproval']", namespaces=ns)
 
-        if not approval_macro_list:
+        if not len(approval_macro_list):
             # we have no page approval macro, so we cannot proceed
-            append_to_log(page_log, page_id, ["Failed", "No page approval macro found"])
+            append_to_log(page_log, pageId, ["Failed", "No page approval macro found"])
             return None
 
         elif len(approval_macro_list) > 1:
             # we have multiple page approval macros, so we log and do not proceed
-            append_to_log(page_log, page_id, ["Failed", "Multiple page approval macros found"])
+            append_to_log(page_log, pageId, ["Failed", "Multiple page approval macros found"])
             return None
 
         else:
             return approval_macro_list[0]
 
 
-def get_userkeys(ns, page_approval_macro, page_id, page_log):
+def get_userkeys(ns, page_approval_macro, pageId, page_log):
     # get users parameter in the macro
     users_param = page_approval_macro.xpath('.//ac:parameter[@ac:name="users"]', namespaces=ns)
-    if not users_param:
-        append_to_log(page_log, page_id, ["Failed", "Users parameter not found in page approval macro"])
+    if not len(users_param):
+        append_to_log(page_log, pageId, ["Failed", "Users parameter not found in page approval macro"])
         return None
 
     users_param = users_param[0]  # get the first (and only) parameter element
 
     # get user elements in the users parameter
     user_elems = users_param.xpath(".//ri:user", namespaces=ns)
-    if not user_elems:
-        append_to_log(page_log, page_id, ["Failed", "User elements not found in page approval macro"])
+    if not len(user_elems):
+        append_to_log(page_log, pageId, ["Failed", "User elements not found in page approval macro"])
         return None
 
     userkeys = [user.get('{http://atlassian.com/resource/identifier}userkey') for user in user_elems]
-    if not userkeys:
-        append_to_log(page_log, page_id, ["Failed", "User keys could not be extracted from user elements"])
+    if not len(userkeys):
+        append_to_log(page_log, pageId, ["Failed", "User keys could not be extracted from user elements"])
         return None
     
     return userkeys
 
-def get_page_approvers(ns, userkeys, user_cache, AUTH):
+def get_allApprovers(ns, userkeys, user_cache, AUTH):
     # final list of page approvers
-    page_approvers = []
+    allApprovers = []
     for userkey in userkeys:
         # check if userkey is in cache
         if userkey in user_cache:
@@ -125,57 +127,58 @@ def get_page_approvers(ns, userkeys, user_cache, AUTH):
                 user_cache[userkey] = username
 
         # add user to page approvers list
-        page_approvers.append(username)
+        allApprovers.append(username)
 
     # get total approvers on macro to check later
-    num_approvers = len(page_approvers)
+    PageApproversCount = len(allApprovers)
 
-    return page_approvers, num_approvers, user_cache
+    return allApprovers, PageApproversCount, user_cache
 
-def get_quorum(ns, num_approvers, page_approval_macro):
+def get_quorum(ns, PageApproversCount, page_approval_macro):
     # check if page approval macro has quorum
     quorum_elem = page_approval_macro.xpath('.//ac:parameter[@ac:name="quorum"]', namespaces=ns)
     # set quorum to all approvers if not set in macro, else get the quorum value
-    quorum = num_approvers if not quorum_elem else int(quorum_elem[0].text)
+    quorum = PageApproversCount if not len(quorum_elem) else int(quorum_elem[0].text)
     return quorum
 
-def get_page_approval_report(page_id, page_log, AUTH):
+def get_page_approval_report(pageId, page_log, AUTH):
 
         # get all attachments for the page
-        get_attachments_url = f"https://confluence.service.anz/rest/api/content/{page_id}/child/attachment"
+        get_attachments_url = f"https://confluence.service.anz/rest/api/content/{pageId}/child/attachment"
         response = requests.get(get_attachments_url,headers={"Accept": "application/json", "X-Atlassian-Token": "no-check"}, auth=AUTH, verify=False)
 
         # if status code is not 200, log the error and continue
         if response.status_code != 200:
-            append_to_log(page_log, page_id, ["Failed", f"Failed to get attachments with status code {response.status_code}"])
+            append_to_log(page_log, pageId, ["Failed", f"Failed to get attachments with status code {response.status_code}"])
             return None
 
         attachments = response.json().get("results", [])
         # if no attachments found, log and continue
-        if not attachments:
-            append_to_log(page_log, page_id, ["Failed", f"No attachments found for page {page_id}."])
+        if not len(attachments):
+            append_to_log(page_log, pageId, ["Failed", f"No attachments found for page {pageId}."])
             return None
 
         # print("attachments:\n", attachments)
 
         # filter attachments for age approval reports
-        reports = [a for a in attachments if a["title"].startswith(f"PA_{page_id}_")]
-        if not reports:
-            append_to_log(page_log, page_id, ["Failed", f"No page approval reports found for page {page_id}."])
+        reports = [a for a in attachments if a["title"].startswith(f"PA_{pageId}_")]
+        if not len(reports):
+            append_to_log(page_log, pageId, ["Failed", f"No page approval reports found for page {pageId}."])
             return None
             
-        # get report with latest attachment date
+        # get report with lexicographically latest title
+        # NOTE: This is an attempt to get the latest report based on the time stamp in the title but it is not always accurate if a report is uploaded the month before for example, with a later upload day
         latest_report_name = max(reports, key=lambda x: x["title"])["title"]
 
         # print("latest report name:\n", latest_report_name)
 
         # download the latest report
-        report_download_url = f"https://confluence.service.anz/download/attachments/{page_id}/{latest_report_name}"
+        report_download_url = f"https://confluence.service.anz/download/attachments/{pageId}/{latest_report_name}"
         # report_download_url = f"https://confluence.service.anz/download/attachments/3704357336/PA_3704357336_29-05-2025_15-42-03_1748497323105.csv"
 
         response = requests.get(report_download_url, auth=AUTH, verify=False)
         if response.status_code != 200:
-            append_to_log(page_log, page_id, ["Failed", f"Failed to download report with status code {response.status_code}"])
+            append_to_log(page_log, pageId, ["Failed", f"Failed to download report with status code {response.status_code}"])
             return None
         
         # read the report into a DataFrame
@@ -185,17 +188,108 @@ def get_page_approval_report(page_id, page_log, AUTH):
 
         return report
 
-def get_expiry(ns, page_approval_macro, page_id):
+def get_expiry(ns, page_approval_macro, pageId):
     expire_after_elem = page_approval_macro.xpath('.//ac:parameter[@ac:name="expireafter"]', namespaces=ns)
-    expire_after = expire_after_elem[0].text if expire_after_elem else None
+    expire_after = expire_after_elem[0].text if expire_after_elem else "None"
 
     expiry_day_elem = page_approval_macro.xpath('.//ac:parameter[@ac:name="expiryday"]', namespaces=ns)
-    expiry_day = expiry_day_elem[0].text if expiry_day_elem else None
+    expiry_day = expiry_day_elem[0].text if expiry_day_elem else "None"
 
     expiry_month_elem = page_approval_macro.xpath('.//ac:parameter[@ac:name="expirymonth"]', namespaces=ns)
-    expiry_month = expiry_month_elem[0].text if expiry_month_elem else None
+    expiry_month = expiry_month_elem[0].text if expiry_month_elem else "None"
 
     return expire_after, expiry_day, expiry_month
+
+# ALTERNATE CHECK PAGE STATUS FUNCTION
+# def check_page_status(report_version, latest_version, latest_rows, quorum):
+#     # check if latest version in report matches the latest version of the page
+#     if report_version != latest_version:
+#         approversWhoHaveApproved = []
+#         PageStatus = "Not Approved"
+#     else: 
+#         approversWhoHaveApproved = list(latest_rows["Approver"])
+#         if len(approversWhoHaveApproved) >= quorum:
+#             PageStatus = "Page Approved"
+#         else:
+#             PageStatus = "Not Approved"
+
+def check_page_status(body_view_tree, pageId, page_log):
+    status_elem = body_view_tree.xpath('//span[@id="pastatus"]')
+    if not status_elem:
+        append_to_log(page_log, pageId, ["Failed", "Page status not found in body export view"])
+        return None
+    
+    return status_elem[0].text
+
+def to_iso8601_duration(duration_str, page_log, pageId):
+    units = {
+        "day": "D",
+        "week": "W",
+        "month": "M",
+        "year": "Y",
+        "hour": "H",
+        "minute": "M",
+        "second": "S"
+    }
+
+    quantity, unit = duration_str.lower().strip().split()
+    quantity = int(quantity)
+    unit = unit.rstrip('s')  # e.g. "days" → "day"
+
+    if unit in ["day", "week", "month", "year"]:
+        return f"P{quantity}{units[unit]}"
+    elif unit in ["hour", "minute", "second"]:
+        return f"PT{quantity}{units[unit]}"
+    else:
+        append_to_log(page_log, pageId, ["Failed", f"Invalid duration unit: {unit}"])
+        return None
+
+def get_expiry_date(expiry_month, expiry_day):
+    today = datetime.today()
+    year = today.year
+
+    # Convert inputs to int if they are not None-like
+    expiry_month = int(expiry_month)
+    expiry_day = int(expiry_day) if expiry_day is not "None" else 1  # Default to 1st
+
+    # Construct the candidate expiry date
+    candidate = datetime(year, expiry_month, expiry_day)
+
+    # If date already passed, shift to next year
+    if candidate < today:
+        candidate = datetime(year + 1, expiry_month, expiry_day)
+
+    return candidate.strftime("%Y-%m-%d %H:%M")
+
+def add_comala_workflow(page_log, pageId, pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth):
+    # expire After
+    if expireAfter != "None":
+        due_date = f"|duedate={to_iso8601_duration(expireAfter, page_log, pageId)}"
+        if due_date is None:
+            # already logged in function
+            return
+    # have expiry day and month
+    elif expiryMonth != "None":
+        due_date = get_expiry_date()
+    else:
+        due_date = ""
+
+    markup = f"""
+        {{workflow:name=Migration from page approval to Comala}} 
+        {{description}}
+            {{The Simple Approval Workflow has 2 states - Not Approved and Approved.}}
+        {{description}}
+        {{state:Not Approved|approved=Approved|colour=#ffab00|taskable=true}}
+            {{approval:Review|minimum={quorum}|user={','.join(allApprovers)}}}
+        {{state}}
+        {{state:Approved|expired=Not Approved|final=true{due_date}|updated=Not Approved}}
+        {{state}}
+    {{workflow}}
+
+    """
+
+    # Attach the workflow to the page
+    
 
 
 
@@ -204,11 +298,11 @@ def main(filename):
     username, password = get_credentials()
     AUTH = HTTPBasicAuth(username, password)
 
-    attach_report_log, page_log = initialise_log()
+    page_log, output_report = initialise_log()
 
     # List of page IDs to check
     with open(filename, "r") as file:
-        page_ids = [line.strip() for line in file if line.strip()]
+        pageIds = [line.strip() for line in file if line.strip()]
 
     ns= {
     'ac': 'http://atlassian.com/content',
@@ -218,63 +312,97 @@ def main(filename):
     # cache to store user id and username mappings
     user_cache = {}
 
-    for page_id in page_ids:
-        print(f"Processing page ID: {page_id}")
+    for pageId in pageIds:
+        print(f"Processing page ID: {pageId}")
 
         # get the page body and the current version
-        get_page_url = f"https://confluence.service.anz/rest/api/content/{page_id}?expand=body.storage,version"
+        # get_page_url = f"https://confluence.service.anz/rest/api/content/{pageId}?expand=body.storage,version"
+        get_page_url = f"https://confluence.service.anz/rest/api/content/{pageId}?expand=body.export_view,body.storage,version"
+        # response = requests.get(get_page_url, headers={"Accept": "application/json"}, auth=AUTH, verify=False)
         response = requests.get(get_page_url, headers={"Accept": "application/json"}, auth=AUTH, verify=False)
 
         # check if get request worked correctly
         if response.status_code != 200:
             if response.status_code == 403:
-                append_to_log(page_log, page_id, ["No", "403: access not granted"])
+                append_to_log(page_log, pageId, ["No", "403: access not granted"])
             elif response.status_code == 404:
-                append_to_log(page_log, page_id, ["No", "404: page does not exist or access not granted"])
+                append_to_log(page_log, pageId, ["No", "404: page does not exist or access not granted"])
             elif response.status_code == 502:
-                append_to_log(page_log, page_id, ["No", "502: bad gateway, likely proxy error"])
+                append_to_log(page_log, pageId, ["No", "502: bad gateway, likely proxy error"])
             else:
-                append_to_log(page_log, page_id, ["No", f"{response.status_code}: page not processed"])
+                append_to_log(page_log, pageId, ["No", f"{response.status_code}: page not processed"])
             continue # do not go through rest of process
         
         data = response.json()
         current_body = data["body"]["storage"]["value"]
+        body_view = data["body"]["export_view"]["value"]
         latest_version = data["version"]["number"]
+
+        # print("Current body:\n", body_view)  # Just to test
 
         # Creates an etree parser
         parser = etree.XMLParser(recover=True)
 
         # Turn our current body into an xml tree so we can process it
-        tree = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{current_body}</root>", parser=parser)
+        body_storage = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{current_body}</root>", parser=parser)
+        body_view_tree = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{body_view}</root>", parser=parser)
 
-        print("Current tree:\n", etree.tostring(tree, pretty_print=True).decode()) # Just to test
+        # print("Current tree:\n", etree.tostring(tree, pretty_print=True).decode()) # Just to test
 
-        page_approval_macro = get_page_approval_macro(ns, tree, page_id, page_log)
-        if not page_approval_macro:
+        page_approval_macro = get_page_approval_macro(ns, body_storage, pageId, page_log)
+        if page_approval_macro is None:
             continue
 
-        userkeys = get_userkeys(ns, page_approval_macro, page_id, page_log)
-        if not userkeys:
+        userkeys = get_userkeys(ns, page_approval_macro, pageId, page_log)
+        if userkeys is None:
             continue
 
-        page_approvers, num_approvers, user_cache = get_page_approvers(ns, userkeys, user_cache, AUTH)
-        if not page_approvers:
-            continue
+        allApprovers, PageApproversCount, user_cache = get_allApprovers(ns, userkeys, user_cache, AUTH)
 
-        quorum = get_quorum(ns, num_approvers, page_approval_macro)
+        quorum = get_quorum(ns, PageApproversCount, page_approval_macro)
 
-        expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, page_id)
-
+        expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
         
         # attach the page approval report to the page
         # TODO: UNCOMMENT THIS LINE TO ACTUALLY ATTACH THE REPORT
-        attach_approval_report(page_id, attach_report_log, AUTH)
+        attach_approval_report(pageId, page_log, AUTH)
 
-        report = get_page_approval_report(page_id, page_log, AUTH)
+        report = get_page_approval_report(pageId, page_log, AUTH)
         if report is None:
             continue
 
+        # print("Report:\n", report)  # Just to test
+
+        # Ensure version column is numeric
+        report["Page Version"] = pd.to_numeric(report["Page Version"], errors="coerce")
+
+        # Find the latest version number
+        report_version = report["Page Version"].max()
+
+        # Filter rows where version equals the latest
+        latest_rows = report[report["Page Version"] == report_version]
+
+        if report_version != latest_version:
+            approversWhoHaveApproved = []
+        else: 
+            approversWhoHaveApproved = list(latest_rows["Approver"])
+
+        # CALL TO ALTERNATE CHECK PAGE STATUS FUNCTION
+        # pageStatus = check_page_status(report_version, latest_version, latest_rows, quorum)
+        pageStatus = check_page_status(body_view_tree, pageId, page_log)
+        if pageStatus is None:
+            continue
+
+        #TODO: get page status from body export view
         
+        append_to_log(output_report, pageId, [pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth], True)
+
+        add_comala_workflow(page_log, pageId, pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth)
+
+        append_to_log(page_log, pageId, ["Success", "Page processed successfully"])
+
+
+
 
 if len(sys.argv) != 2:
     print("Usage: python script.py <filename>")
