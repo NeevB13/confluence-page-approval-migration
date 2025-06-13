@@ -1,6 +1,7 @@
 import csv
-import datetime
+from datetime import datetime
 import getpass
+import json
 import sys
 import requests
 import pandas as pd
@@ -15,7 +16,7 @@ def initialise_log():
     """
     """
     # Create csv for pages
-    startTimestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    startTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     page_log = f"page_log_{startTimestamp}.csv"
     output_report = f"output_report_{startTimestamp}.csv"
 
@@ -36,7 +37,7 @@ def append_to_log(filename, pageId, data, is_output_report=False):
     """
     url = f"https://confluence.service.anz/pages/viewpage.action?pageId={pageId} "
     if is_output_report == False:
-        timeNow = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timeNow = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = [timeNow, url, pageId] + data
     else:
         log_entry = [pageId, url] + data
@@ -67,17 +68,30 @@ def attach_approval_report(pageId, page_log, AUTH):
     if response.status_code != 200 and response.status_code != 201:
         append_to_log(page_log, pageId, ["Failed", "Could not attach page approval report", f"Status code: {response.status_code}"])
 
+
+def check_comala_workflow(pageId, AUTH, page_log):
+    comalaURL = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/status"
+
+    response = requests.get(comalaURL, auth=AUTH, verify = False)
+    if response.status_code == 200:
+        append_to_log(page_log, pageId, ["Failed", "Comala workflow already exists on page"])
+        True
+    return False
+
+
 def get_page_approval_macro(ns, tree, pageId, page_log):
     # f  the page approval macro and get all the approvers
         # //ac means it searches at every depth, /ac would only search at the root level
         approval_macro_list = tree.xpath("//ac:structured-macro[@ac:name='pageapproval']", namespaces=ns)
 
         if not len(approval_macro_list):
+            # HANDLE CASE: No page approval macro found
             # we have no page approval macro, so we cannot proceed
             append_to_log(page_log, pageId, ["Failed", "No page approval macro found"])
             return None
 
         elif len(approval_macro_list) > 1:
+            # HANDLE CASE: Multiple page approval macros found
             # we have multiple page approval macros, so we log and do not proceed
             append_to_log(page_log, pageId, ["Failed", "Multiple page approval macros found"])
             return None
@@ -250,7 +264,7 @@ def get_expiry_date(expiry_month, expiry_day):
 
     # Convert inputs to int if they are not None-like
     expiry_month = int(expiry_month)
-    expiry_day = int(expiry_day) if expiry_day is not "None" else 1  # Default to 1st
+    expiry_day = int(expiry_day) if expiry_day != "None" else 1  # Default to 1st
 
     # Construct the candidate expiry date
     candidate = datetime(year, expiry_month, expiry_day)
@@ -261,19 +275,20 @@ def get_expiry_date(expiry_month, expiry_day):
 
     return candidate.strftime("%Y-%m-%d %H:%M")
 
-def add_comala_workflow(page_log, pageId, pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth):
+def add_comala_workflow(page_log, pageId, quorum, allApprovers, expireAfter, expiryDay, expiryMonth, AUTH):
     # expire After
     if expireAfter != "None":
         due_date = f"|duedate={to_iso8601_duration(expireAfter, page_log, pageId)}"
         if due_date is None:
             # already logged in function
-            return
+            return False
     # have expiry day and month
     elif expiryMonth != "None":
-        due_date = get_expiry_date()
+        due_date = f"|duedate={get_expiry_date(expiryMonth, expiryDay)}"
     else:
         due_date = ""
 
+    # markup to apply comala workflow
     markup = f"""
         {{workflow:name=Migration from page approval to Comala}} 
         {{description}}
@@ -285,12 +300,91 @@ def add_comala_workflow(page_log, pageId, pageStatus, PageApproversCount, quorum
         {{state:Approved|expired=Not Approved|final=true{due_date}|updated=Not Approved}}
         {{state}}
     {{workflow}}
-
     """
 
-    # Attach the workflow to the page
-    
+    markup = markup.strip()
 
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Atlassian-Token": "no-check"
+    }
+
+    apply_workflow_url = f"https://confluence.service.anz/rest/cw/1/page/{pageId}"
+
+    # format payload for post request
+    payload = {
+    "markup": markup
+    }
+
+    # print("payload: ", payload)
+    
+    # # TODO: GET RID OF THIS, ONLY FOR TESTING
+    # delete_url = f"https://your-confluence-site/rest/cw/1/page/{pageId}"
+    # delete_response = requests.delete(delete_url, headers=headers, auth=AUTH, verify=False)
+
+    # Attach the workflow to the page
+    response = requests.put(apply_workflow_url, headers=headers, auth=AUTH, json=payload, verify=False)
+
+    if response.status_code != 200 and response.status_code != 201:
+        append_to_log(page_log, pageId, ["Failed", f"Could not apply Comala workflow", f"Status code: {response.status_code}"])
+        return False
+    else:
+        print(f"Comala workflow applied to page {pageId} successfully.")
+        return True
+
+# def approve_comala_workflow(pageId, AUTH, page_log):
+#     url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/approvals/approve"
+
+#     body = {
+#     "name": "Review"
+#     }
+
+#     headers = {
+#         "Accept": "application/json",
+#         "Content-Type": "application/json",
+#         "X-Atlassian-Token": "no-check"
+#     }
+
+#     response = requests.patch(url, headers=headers, auth = AUTH, json=body, verify=False)
+    
+#     if response.status_code != 200 and response.status_code != 201:
+#         append_to_log(page_log, pageId, ["Failed", f"Could not approve Comala workflow, Error {response.status_code}: {response.text}"])
+#         return False
+#     return True
+
+def approve_comala_workflow(pageId, AUTH, page_log):
+    url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/state"
+
+    body = {
+    "name": "Approved"
+    }
+
+    # print("body: ", body)
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Atlassian-Token": "no-check"
+    }
+
+    check_url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/status?expand=states,approvals"
+    check_response = requests.get(check_url, headers=headers, auth=AUTH, verify=False)
+
+    # print(check_response.json())
+
+
+    response = requests.put(url, headers=headers, auth = AUTH, json=body, verify=False)
+    
+    if response.status_code != 200 and response.status_code != 201:
+        append_to_log(page_log, pageId, ["Failed", f"Could not approve Comala workflow, Error {response.status_code}: {response.text}"])
+        return False
+    print(f"Workflow for page {pageId} approved successfully.")
+    return True
+
+
+def remove_pa_macro():
+    pass
 
 
 def main(filename):
@@ -324,14 +418,22 @@ def main(filename):
         # check if get request worked correctly
         if response.status_code != 200:
             if response.status_code == 403:
-                append_to_log(page_log, pageId, ["No", "403: access not granted"])
+                append_to_log(page_log, pageId, ["Failed", "403: access not granted"])
             elif response.status_code == 404:
-                append_to_log(page_log, pageId, ["No", "404: page does not exist or access not granted"])
+                # HANDLE CASE: Page does not exist/incorrect pageId
+                # HANDLE CASE: View Restrictions on page
+                append_to_log(page_log, pageId, ["Failed", "404: page does not exist or access not granted"])
             elif response.status_code == 502:
-                append_to_log(page_log, pageId, ["No", "502: bad gateway, likely proxy error"])
+                append_to_log(page_log, pageId, ["Failed", "502: bad gateway, likely proxy error"])
             else:
-                append_to_log(page_log, pageId, ["No", f"{response.status_code}: page not processed"])
+                append_to_log(page_log, pageId, ["Failed", f"{response.status_code}: page not processed"])
             continue # do not go through rest of process
+
+        # check if there is already a comala workflow on the page
+        is_comala_workflow = check_comala_workflow(pageId, AUTH, page_log)
+        if is_comala_workflow:
+            continue
+
         
         data = response.json()
         current_body = data["body"]["storage"]["value"]
@@ -392,16 +494,28 @@ def main(filename):
         pageStatus = check_page_status(body_view_tree, pageId, page_log)
         if pageStatus is None:
             continue
-
+        
+        # print("Page status:", pageStatus)
         #TODO: get page status from body export view
         
         append_to_log(output_report, pageId, [pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth], True)
 
-        add_comala_workflow(page_log, pageId, pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth)
+        # add comala workflow to page
+        comala_workflow_added = add_comala_workflow(page_log, pageId, quorum, allApprovers, expireAfter, expiryDay, expiryMonth, AUTH)
+        if not comala_workflow_added:
+            continue
+        
+        # if page is approved, make approval status True
+        if pageStatus == "Page Approved":
+            page_approved = approve_comala_workflow(pageId, AUTH, page_log, pageStatus)
+            if not page_approved:
+                continue
+
+        # TODO: Uncomment this line to remove the page approval macro
+        # macro_removed = remove_pa_macro()
+
 
         append_to_log(page_log, pageId, ["Success", "Page processed successfully"])
-
-
 
 
 if len(sys.argv) != 2:
