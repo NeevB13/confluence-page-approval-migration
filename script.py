@@ -335,7 +335,7 @@ def add_comala_workflow(page_log, pageId, quorum, expireAfter, expiryDay, expiry
         append_to_log(page_log, pageId, ["Failed", f"Could not apply Comala workflow", f"Status code: {response.status_code}"])
         return False
     else:
-        print(f"Comala workflow applied to page {pageId} successfully.")
+        # print(f"Comala workflow applied to page {pageId} successfully.")
         return True
 
 # def approve_comala_workflow(pageId, AUTH, page_log):
@@ -384,12 +384,35 @@ def approve_comala_workflow(pageId, AUTH, page_log):
     if response.status_code != 200 and response.status_code != 201:
         append_to_log(page_log, pageId, ["Failed", f"Could not approve Comala workflow, Error {response.status_code}: {response.text}"])
         return False
-    print(f"Workflow for page {pageId} approved successfully.")
+    # print(f"Workflow for page {pageId} approved successfully.")
     return True
 
 
 def remove_pa_macro():
     pass
+
+def add_approvers(pageId, allApprovers, AUTH, page_log):
+    approversURL = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/approvals/assign"
+
+    assignees = [{"username": user} for user in allApprovers]
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Atlassian-Token": "no-check" 
+    }
+
+    payload = {
+        "name": "Review",
+        "assignees": assignees
+    }
+
+    response = requests.patch(approversURL, headers=headers, auth=AUTH, json=payload, verify=False)
+    if response.status_code != 200 and response.status_code != 201:
+        append_to_log(page_log, pageId, ["Failed", f"Could not add approvers to Comala workflow", f"Status code: {response.status_code}"])
+        return False
+    else:
+        return True
 
 
 def main(filename):
@@ -438,7 +461,6 @@ def main(filename):
         is_comala_workflow = check_comala_workflow(pageId, AUTH, page_log)
         print(is_comala_workflow)
         if is_comala_workflow:
-            print("TEST")
             continue
 
         
@@ -508,7 +530,7 @@ def main(filename):
         append_to_log(output_report, pageId, [pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth], True)
 
         # add comala workflow to page
-        comala_workflow_added = add_comala_workflow(page_log, pageId, quorum, allApprovers, expireAfter, expiryDay, expiryMonth, AUTH)
+        comala_workflow_added = add_comala_workflow(page_log, pageId, quorum, expireAfter, expiryDay, expiryMonth, AUTH)
         if not comala_workflow_added:
             continue
         
@@ -517,6 +539,11 @@ def main(filename):
             page_approved = approve_comala_workflow(pageId, AUTH, page_log)
             if not page_approved:
                 continue
+        else:
+            approvers_added = add_approvers(pageId, allApprovers, AUTH, page_log)
+            if not approvers_added:
+                continue
+
 
         # TODO: Uncomment this line to remove the page approval macro
         # macro_removed = remove_pa_macro()
