@@ -75,7 +75,7 @@ def check_comala_workflow(pageId, AUTH, page_log):
     response = requests.get(comalaURL, auth=AUTH, verify = False)
     if response.status_code == 200:
         append_to_log(page_log, pageId, ["Failed", "Comala workflow already exists on page"])
-        True
+        return True
     return False
 
 
@@ -275,7 +275,7 @@ def get_expiry_date(expiry_month, expiry_day):
 
     return candidate.strftime("%Y-%m-%d %H:%M")
 
-def add_comala_workflow(page_log, pageId, quorum, allApprovers, expireAfter, expiryDay, expiryMonth, AUTH):
+def add_comala_workflow(page_log, pageId, quorum, expireAfter, expiryDay, expiryMonth, AUTH):
     # expire After
     if expireAfter != "None":
         due_date = f"|duedate={to_iso8601_duration(expireAfter, page_log, pageId)}"
@@ -288,6 +288,11 @@ def add_comala_workflow(page_log, pageId, quorum, allApprovers, expireAfter, exp
     else:
         due_date = ""
 
+    if quorum > 1:
+        minApprovals = f"|minimum={quorum}"
+    else:
+        minApprovals = ""
+        
     # markup to apply comala workflow
     markup = f"""
         {{workflow:name=Migration from page approval to Comala}} 
@@ -295,7 +300,7 @@ def add_comala_workflow(page_log, pageId, quorum, allApprovers, expireAfter, exp
             {{The Simple Approval Workflow has 2 states - Not Approved and Approved.}}
         {{description}}
         {{state:Not Approved|approved=Approved|colour=#ffab00|taskable=true}}
-            {{approval:Review|minimum={quorum}|user={','.join(allApprovers)}}}
+            {{approval:Review|assignable=true{minApprovals}}}
         {{state}}
         {{state:Approved|expired=Not Approved|final=true{due_date}|updated=Not Approved}}
         {{state}}
@@ -431,7 +436,9 @@ def main(filename):
 
         # check if there is already a comala workflow on the page
         is_comala_workflow = check_comala_workflow(pageId, AUTH, page_log)
+        print(is_comala_workflow)
         if is_comala_workflow:
+            print("TEST")
             continue
 
         
@@ -507,7 +514,7 @@ def main(filename):
         
         # if page is approved, make approval status True
         if pageStatus == "Page Approved":
-            page_approved = approve_comala_workflow(pageId, AUTH, page_log, pageStatus)
+            page_approved = approve_comala_workflow(pageId, AUTH, page_log)
             if not page_approved:
                 continue
 
