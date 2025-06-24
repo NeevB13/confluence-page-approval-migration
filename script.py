@@ -74,10 +74,9 @@ def check_comala_workflow(pageId, AUTH, page_log):
 
     response = requests.get(comalaURL, auth=AUTH, verify = False)
     if response.status_code == 200:
-        append_to_log(page_log, pageId, ["Failed", "Comala workflow already exists on page"])
+        append_to_log(page_log, pageId, ["Success", "Comala workflow already exists on page"])
         return True
     return False
-
 
 def get_page_approval_macro(ns, tree, pageId, page_log):
     # f  the page approval macro and get all the approvers
@@ -235,58 +234,101 @@ def check_page_status(body_view_tree, pageId, page_log):
     
     return status_elem[0].text
 
-def to_iso8601_duration(duration_str, page_log, pageId):
-    units = {
-        "day": "D",
-        "week": "W",
-        "month": "M",
-        "year": "Y",
-        "hour": "H",
-        "minute": "M",
-        "second": "S"
+def get_latest_approval_date(df): 
+    # Strip out the timezone (e.g., AEST)
+    df['Approval Date Clean'] = df['Approval Date'].str.replace(r'\s[A-Z]{3,4}', '', regex=True)
+
+    # Now parse without timezone
+    df['Approval Date Parsed'] = pd.to_datetime(
+        df['Approval Date Clean'],
+        format="%a %b %d %H:%M:%S %Y",  # note: no %Z
+        errors='coerce'
+    )
+
+    print("parsed date:", df['Approval Date Parsed'])
+
+    # Get the latest date
+    latest_date = df['Approval Date Parsed'].max()
+
+    return latest_date
+
+def get_expire_after(report, expireAfter):
+    unit_to_ms = {
+        'second': 1000,
+        'minute': 60 * 1000,
+        'hour':   60 * 60 * 1000,
+        'day':    24 * 60 * 60 * 1000,
+        'week':   7 * 24 * 60 * 60 * 1000,
+        'month':  30.44 * 24 * 60 * 60 * 1000,   # average month
+        'year':   365.25 * 24 * 60 * 60 * 1000   # average year
     }
 
-    quantity, unit = duration_str.lower().strip().split()
+
+    print("report:", report)
+
+    quantity, unit = expireAfter.lower().strip().split()
     quantity = int(quantity)
     unit = unit.rstrip('s')  # e.g. "days" → "day"
 
-    if unit in ["day", "week", "month", "year"]:
-        return f"P{quantity}{units[unit]}"
-    elif unit in ["hour", "minute", "second"]:
-        return f"PT{quantity}{units[unit]}"
-    else:
-        append_to_log(page_log, pageId, ["Failed", f"Invalid duration unit: {unit}"])
+    if unit not in unit_to_ms:
+        return 0000000000000  # Invalid unit, return a placeholder
+    
+    # the number of milliseconds to add to the current time
+    offset = quantity * unit_to_ms[unit]
+
+    latest_date = get_latest_approval_date(report)  # Get the latest approval date from the report
+    
+
+    if not latest_date:
+        return 0000000000000
+    
+    # convert date to datetime
+    # latest_approval_date = datetime.strptime(latest_date, "%a %b %d %H:%M:%S %Z %Y")
+
+    # convert datetime to ms
+    date_ms = int(latest_date.timestamp() * 1000)
+
+    expiry_date = date_ms + offset
+    
+    return expiry_date
+
+
+
+
+
+def get_expiry_date(expiry_month, expiry_day, expireAfter, report, pageId, pageStatus, page_log):
+
+    if expiry_month == expiry_day == expireAfter == "None":
         return None
 
-def get_expiry_date(expiry_month, expiry_day):
-    today = datetime.today()
-    year = today.year
+    # if page is approved and we have expireAfter, we use that
+    if pageStatus == "Page Approved" and expireAfter != "None":
+        expiry_date = get_expire_after(report, expireAfter)
+        if expiry_date == 0000000000000:
+            append_to_log(page_log, pageId, ["Failed", "Could not calculate expiry date from expireAfter"])
+        return expiry_date
+    elif expiry_month != "None" and expiry_day != "None":
+        today = datetime.today()
+        year = today.year
 
-    # Convert inputs to int if they are not None-like
-    expiry_month = int(expiry_month)
-    expiry_day = int(expiry_day) if expiry_day != "None" else 1  # Default to 1st
+        # Convert inputs to int if they are not None-like
+        expiry_month = int(expiry_month)
+        expiry_day = int(expiry_day) if expiry_day != "None" else 1  # Default to 1st
 
-    # Construct the candidate expiry date
-    candidate = datetime(year, expiry_month, expiry_day)
+        # Construct the candidate expiry date
+        candidate = datetime(year, expiry_month, expiry_day)
 
-    # If date already passed, shift to next year
-    if candidate < today:
-        candidate = datetime(year + 1, expiry_month, expiry_day)
+        # If date already passed, shift to next year
+        if candidate < today:
+            candidate = datetime(year + 1, expiry_month, expiry_day)
 
-    return candidate.strftime("%Y-%m-%d %H:%M")
+        # Return epoch millis
+        return int(candidate.timestamp() * 1000)
 
-def add_comala_workflow(page_log, pageId, quorum, expireAfter, expiryDay, expiryMonth, AUTH):
-    # expire After
-    if expireAfter != "None":
-        due_date = f"|duedate={to_iso8601_duration(expireAfter, page_log, pageId)}"
-        if due_date is None:
-            # already logged in function
-            return False
-    # have expiry day and month
-    elif expiryMonth != "None":
-        due_date = f"|duedate={get_expiry_date(expiryMonth, expiryDay)}"
-    else:
-        due_date = ""
+    # in the case that there are no valid configs
+    return None
+
+def add_comala_workflow(page_log, pageId, quorum, AUTH):
 
     if quorum > 1:
         minApprovals = f"|minimum={quorum}"
@@ -302,7 +344,7 @@ def add_comala_workflow(page_log, pageId, quorum, expireAfter, expiryDay, expiry
         {{state:Not Approved|approved=Approved|colour=#ffab00|taskable=true}}
             {{approval:Review|assignable=true{minApprovals}}}
         {{state}}
-        {{state:Approved|expired=Not Approved|final=true{due_date}|updated=Not Approved}}
+        {{state:Approved|expired=Not Approved|final=true|changeduedate=true|updated=Not Approved}}
         {{state}}
     {{workflow}}
     """
@@ -373,8 +415,8 @@ def approve_comala_workflow(pageId, AUTH, page_log):
         "X-Atlassian-Token": "no-check"
     }
 
-    check_url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/status?expand=states,approvals"
-    check_response = requests.get(check_url, headers=headers, auth=AUTH, verify=False)
+    # check_url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/status?expand=states,approvals"
+    # check_response = requests.get(check_url, headers=headers, auth=AUTH, verify=False)
 
     # print(check_response.json())
 
@@ -413,6 +455,17 @@ def add_approvers(pageId, allApprovers, AUTH, page_log):
         return False
     else:
         return True
+
+def add_expiry_date(pageId, expiry_date, AUTH, page_log):
+    expiryDateURL = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/expirydate"
+
+    response = requests.patch(expiryDateURL, headers={"X-Atlassian-Token": "no-check"}, auth=AUTH, json={"expiry": expiry_date}, verify=False)
+
+    if response.status_code != 200 and response.status_code != 201 and response.status_code != 204:
+        append_to_log(page_log, pageId, ["Failed", f"Could not add expiry date to Comala workflow", f"Status code: {response.status_code}"])
+        return False
+    
+    return True
 
 
 def main(filename):
@@ -459,7 +512,6 @@ def main(filename):
 
         # check if there is already a comala workflow on the page
         is_comala_workflow = check_comala_workflow(pageId, AUTH, page_log)
-        print(is_comala_workflow)
         if is_comala_workflow:
             continue
 
@@ -530,7 +582,7 @@ def main(filename):
         append_to_log(output_report, pageId, [pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth], True)
 
         # add comala workflow to page
-        comala_workflow_added = add_comala_workflow(page_log, pageId, quorum, expireAfter, expiryDay, expiryMonth, AUTH)
+        comala_workflow_added = add_comala_workflow(page_log, pageId, quorum, AUTH)
         if not comala_workflow_added:
             continue
         
@@ -543,10 +595,18 @@ def main(filename):
             approvers_added = add_approvers(pageId, allApprovers, AUTH, page_log)
             if not approvers_added:
                 continue
+        
+        expiry_date = get_expiry_date(expiryMonth, expiryDay, expireAfter, report, pageId, pageStatus, page_log)
+        # None means no date, 0000000000000 means could not get date
+        if expiry_date == 0000000000000:
+            # HANDLE CASE: Could not get expiry date
+            append_to_log(page_log, pageId, ["Failed", "Could not get expiry date"])
+            continue
 
-
-        # TODO: Uncomment this line to remove the page approval macro
-        # macro_removed = remove_pa_macro()
+        if expiry_date is not None:
+            expiry_date_added = add_expiry_date(pageId, expiry_date, AUTH, page_log)
+            if not expiry_date_added:
+                continue
 
 
         append_to_log(page_log, pageId, ["Success", "Page processed successfully"])
