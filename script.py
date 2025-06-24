@@ -615,21 +615,21 @@ def main(filename):
             page_approved = approve_comala_workflow(pageId, AUTH, page_log)
             if not page_approved:
                 continue
+
+            expiry_date = get_expiry_date(expiryMonth, expiryDay, expireAfter, report, pageId, pageStatus, page_log)
+            # None means no date, 0000000000000 means could not get date
+            if expiry_date == 0000000000000:
+                # HANDLE CASE: Could not get expiry date
+                append_to_log(page_log, pageId, ["Failed", "Could not get expiry date"])
+                continue
+
+            if expiry_date is not None:
+                expiry_date_added = add_expiry_date(pageId, expiry_date, AUTH, page_log)
+                if not expiry_date_added:
+                    continue
         else:
             approvers_added = add_approvers(pageId, allApprovers, AUTH, page_log)
             if not approvers_added:
-                continue
-        
-        expiry_date = get_expiry_date(expiryMonth, expiryDay, expireAfter, report, pageId, pageStatus, page_log)
-        # None means no date, 0000000000000 means could not get date
-        if expiry_date == 0000000000000:
-            # HANDLE CASE: Could not get expiry date
-            append_to_log(page_log, pageId, ["Failed", "Could not get expiry date"])
-            continue
-
-        if expiry_date is not None:
-            expiry_date_added = add_expiry_date(pageId, expiry_date, AUTH, page_log)
-            if not expiry_date_added:
                 continue
 
 
