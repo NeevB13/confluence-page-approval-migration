@@ -12,6 +12,8 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+baseURL = "http://psdca20l.unix.anz:8094"
+
 def initialise_log():
     """
     """
@@ -35,7 +37,7 @@ def initialise_log():
 def append_to_log(filename, pageId, data, is_output_report=False):
     """
     """
-    url = f"https://confluence.service.anz/pages/viewpage.action?pageId={pageId} "
+    url = f"{baseURL}/pages/viewpage.action?pageId={pageId} "
     if is_output_report == False:
         timeNow = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = [timeNow, url, pageId] + data
@@ -61,7 +63,7 @@ def get_credentials():
 
 def attach_approval_report(pageId, page_log, AUTH):
     # Attach approval macro report to page
-    url = f"https://confluence.service.anz/rest/pageApprovals/1/report/attachCSV/{pageId}"
+    url = f"{baseURL}/rest/pageApprovals/1/report/attachCSV/{pageId}"
 
     response = requests.post(url, headers = {"X-Atlassian-Token": "no-check"}, auth=AUTH, verify=False)
 
@@ -70,7 +72,7 @@ def attach_approval_report(pageId, page_log, AUTH):
 
 
 def check_comala_workflow(pageId, AUTH, page_log):
-    comalaURL = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/status"
+    comalaURL = f"{baseURL}/rest/cw/1/content/{pageId}/status"
 
     response = requests.get(comalaURL, auth=AUTH, verify = False)
     if response.status_code == 200:
@@ -111,8 +113,8 @@ def get_userkeys(ns, page_approval_macro, pageId, page_log):
     # get user elements in the users parameter
     user_elems = users_param.xpath(".//ri:user", namespaces=ns)
     if not len(user_elems):
-        append_to_log(page_log, pageId, ["Failed", "User elements not found in page approval macro"])
-        return None
+        # append_to_log(page_log, pageId, ["Failed", "User elements not found in page approval macro"])
+        return []
 
     userkeys = [user.get('{http://atlassian.com/resource/identifier}userkey') for user in user_elems]
     if not len(userkeys):
@@ -135,7 +137,7 @@ def get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH):
 
         else:
             # get the user details from the API
-            get_user_url = f"https://confluence.service.anz/rest/api/user?key={userkey}"
+            get_user_url = f"{baseURL}/rest/api/user?key={userkey}"
             response = requests.get(get_user_url, auth=AUTH, verify=False)
 
             if response.status_code == 200:
@@ -166,17 +168,17 @@ def get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH):
 
     return allApprovers, PageApproversCount, user_cache, inactive_set, approvers_message  
 
-def get_quorum(ns, PageApproversCount, page_approval_macro):
+def get_quorum(ns, page_approval_macro):
     # check if page approval macro has quorum
     quorum_elem = page_approval_macro.xpath('.//ac:parameter[@ac:name="quorum"]', namespaces=ns)
     # set quorum to all approvers if not set in macro, else get the quorum value
-    quorum = PageApproversCount if not len(quorum_elem) else int(quorum_elem[0].text)
+    quorum = 1 if not len(quorum_elem) else int(quorum_elem[0].text)
     return quorum
 
 def get_page_approval_report(pageId, page_log, AUTH):
 
         # get all attachments for the page
-        get_attachments_url = f"https://confluence.service.anz/rest/api/content/{pageId}/child/attachment"
+        get_attachments_url = f"{baseURL}/rest/api/content/{pageId}/child/attachment"
         response = requests.get(get_attachments_url,headers={"Accept": "application/json", "X-Atlassian-Token": "no-check"}, auth=AUTH, verify=False)
 
         # if status code is not 200, log the error and continue
@@ -205,8 +207,8 @@ def get_page_approval_report(pageId, page_log, AUTH):
         # print("latest report name:\n", latest_report_name)
 
         # download the latest report
-        report_download_url = f"https://confluence.service.anz/download/attachments/{pageId}/{latest_report_name}"
-        # report_download_url = f"https://confluence.service.anz/download/attachments/3704357336/PA_3704357336_29-05-2025_15-42-03_1748497323105.csv"
+        report_download_url = f"{baseURL}/download/attachments/{pageId}/{latest_report_name}"
+        # report_download_url = f"{baseURL}/download/attachments/3704357336/PA_3704357336_29-05-2025_15-42-03_1748497323105.csv"
 
         response = requests.get(report_download_url, auth=AUTH, verify=False)
         if response.status_code != 200:
@@ -342,12 +344,8 @@ def get_expiry_date(expiry_month, expiry_day, expireAfter, report, pageId, pageS
     # in the case that there are no valid configs
     return None
 
-def add_comala_workflow(page_log, pageId, quorum, AUTH):
+def add_comala_workflow(page_log, pageId, AUTH):
 
-    if quorum > 1:
-        minApprovals = f"|minimum={quorum}"
-    else:
-        minApprovals = ""
         
     # markup to apply comala workflow
     markup = f"""
@@ -356,7 +354,7 @@ def add_comala_workflow(page_log, pageId, quorum, AUTH):
             {{The Simple Approval Workflow has 2 states - Not Approved and Approved.}}
         {{description}}
         {{state:Not Approved|approved=Approved|colour=#ffab00|taskable=true}}
-            {{approval:Review|assignable=true{minApprovals}}}
+            {{approval:Review|assignable=true}}
         {{state}}
         {{state:Approved|expired=Not Approved|final=true|changeduedate=true|updated=Not Approved}}
         {{state}}
@@ -371,7 +369,7 @@ def add_comala_workflow(page_log, pageId, quorum, AUTH):
         "X-Atlassian-Token": "no-check"
     }
 
-    apply_workflow_url = f"https://confluence.service.anz/rest/cw/1/page/{pageId}"
+    apply_workflow_url = f"{baseURL}/rest/cw/1/page/{pageId}"
 
     # format payload for post request
     payload = {
@@ -391,7 +389,7 @@ def add_comala_workflow(page_log, pageId, quorum, AUTH):
         return True
 
 # def approve_comala_workflow(pageId, AUTH, page_log):
-#     url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/approvals/approve"
+#     url = f"{baseURL}/rest/cw/1/content/{pageId}/approvals/approve"
 
 #     body = {
 #     "name": "Review"
@@ -411,7 +409,7 @@ def add_comala_workflow(page_log, pageId, quorum, AUTH):
 #     return True
 
 def approve_comala_workflow(pageId, AUTH, page_log):
-    url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/state"
+    url = f"{baseURL}/rest/cw/1/content/{pageId}/state"
 
     body = {
     "name": "Approved"
@@ -425,7 +423,7 @@ def approve_comala_workflow(pageId, AUTH, page_log):
         "X-Atlassian-Token": "no-check"
     }
 
-    # check_url = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/status?expand=states,approvals"
+    # check_url = f"{baseURL}/rest/cw/1/content/{pageId}/status?expand=states,approvals"
     # check_response = requests.get(check_url, headers=headers, auth=AUTH, verify=False)
 
     # print(check_response.json())
@@ -444,7 +442,7 @@ def remove_pa_macro():
     pass
 
 def add_approvers(pageId, allApprovers, AUTH, page_log):
-    approversURL = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/approvals/assign"
+    approversURL = f"{baseURL}/rest/cw/1/content/{pageId}/approvals/assign"
 
     assignees = [{"username": user} for user in allApprovers]
 
@@ -467,7 +465,7 @@ def add_approvers(pageId, allApprovers, AUTH, page_log):
         return True
 
 def add_expiry_date(pageId, expiry_date, AUTH, page_log):
-    expiryDateURL = f"https://confluence.service.anz/rest/cw/1/content/{pageId}/expirydate"
+    expiryDateURL = f"{baseURL}/rest/cw/1/content/{pageId}/expirydate"
 
     response = requests.patch(expiryDateURL, headers={"X-Atlassian-Token": "no-check"}, auth=AUTH, json={"expiry": expiry_date}, verify=False)
 
@@ -504,24 +502,48 @@ def main(filename):
         print(f"Processing page ID: {pageId}")
 
         # get the page body and the current version
-        # get_page_url = f"https://confluence.service.anz/rest/api/content/{pageId}?expand=body.storage,version"
-        get_page_url = f"https://confluence.service.anz/rest/api/content/{pageId}?expand=body.export_view,body.storage,version"
+        # get_page_url = f"{baseURL}/rest/api/content/{pageId}?expand=body.storage,version"
+        get_page_url = f"{baseURL}/rest/api/content/{pageId}?expand=body.export_view,body.storage,version"
         # response = requests.get(get_page_url, headers={"Accept": "application/json"}, auth=AUTH, verify=False)
         response = requests.get(get_page_url, headers={"Accept": "application/json"}, auth=AUTH, verify=False)
 
         # check if get request worked correctly
         if response.status_code != 200:
             if response.status_code == 403:
-                append_to_log(page_log, pageId, ["Failed", "403: access not granted"])
+                append_to_log(page_log, pageId, ["Failed", "could not get page, 403: access not granted"])
             elif response.status_code == 404:
                 # HANDLE CASE: Page does not exist/incorrect pageId
                 # HANDLE CASE: View Restrictions on page
-                append_to_log(page_log, pageId, ["Failed", "404: page does not exist or access not granted"])
+                append_to_log(page_log, pageId, ["Failed", "could not get page, 404: page does not exist or access not granted"])
             elif response.status_code == 502:
-                append_to_log(page_log, pageId, ["Failed", "502: bad gateway, likely proxy error"])
+                append_to_log(page_log, pageId, ["Failed", "could not get page, 502: bad gateway, likely proxy error"])
             else:
-                append_to_log(page_log, pageId, ["Failed", f"{response.status_code}: page not processed"])
+                append_to_log(page_log, pageId, ["Failed", f"could not get page, {response.status_code}: page not processed"])
             continue # do not go through rest of process
+        
+
+        data = response.json()
+        current_body = data["body"]["storage"]["value"]
+        body_view = data["body"]["export_view"]["value"]
+        latest_version = data["version"]["number"]
+
+       
+
+        # Creates an etree parser
+        parser = etree.XMLParser(recover=True)
+
+        # Turn our current body into an xml tree so we can process it
+        body_storage = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{current_body}</root>", parser=parser)
+        body_view_tree = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{body_view}</root>", parser=parser)
+    
+        # print("Current body:\n", body_storage)  # Just to test
+
+        # print("Current tree:\n", etree.tostring(body_storage, pretty_print=True).decode()) # Just to test
+
+        # check for single page approval macro on the page
+        page_approval_macro = get_page_approval_macro(ns, body_storage, pageId, page_log)
+        if page_approval_macro is None:
+            continue
         
         # attach the page approval report to the page
         attach_approval_report(pageId, page_log, AUTH)
@@ -531,39 +553,27 @@ def main(filename):
         if is_comala_workflow:
             continue
 
-        
-        data = response.json()
-        current_body = data["body"]["storage"]["value"]
-        body_view = data["body"]["export_view"]["value"]
-        latest_version = data["version"]["number"]
-
-        # print("Current body:\n", body_view)  # Just to test
-
-        # Creates an etree parser
-        parser = etree.XMLParser(recover=True)
-
-        # Turn our current body into an xml tree so we can process it
-        body_storage = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{current_body}</root>", parser=parser)
-        body_view_tree = etree.fromstring(f"<root xmlns:ac='http://atlassian.com/content' xmlns:ri='http://atlassian.com/resource/identifier'>{body_view}</root>", parser=parser)
-
-        # print("Current tree:\n", etree.tostring(tree, pretty_print=True).decode()) # Just to test
-
-        page_approval_macro = get_page_approval_macro(ns, body_storage, pageId, page_log)
-        if page_approval_macro is None:
-            continue
-
-        userkeys = get_userkeys(ns, page_approval_macro, pageId, page_log)
-        if userkeys is None:
+        # add initial workflow
+        comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH)
+        if not comala_workflow_added:
             continue
         
-        # approvers message is a string telling us whether all approvers are active or not
-        allApprovers, PageApproversCount, user_cache, inactive_set, approvers_message = get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH)
+        
+        # get page status initially
+        pageStatus = check_page_status(body_view_tree, pageId, page_log)
+        if pageStatus is None:
+            continue
+        
+        # approve comala workflow if page is approved
+        if pageStatus == "Page Approved":
+            page_approved = approve_comala_workflow(pageId, AUTH, page_log)
+            if not page_approved:
+                continue
 
-        quorum = get_quorum(ns, PageApproversCount, page_approval_macro)
-
-        expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
         
 
+        quorum = get_quorum(ns, page_approval_macro)
+        
         report = get_page_approval_report(pageId, page_log, AUTH)
         if report is None:
             continue
@@ -573,32 +583,17 @@ def main(filename):
         # Ensure version column is numeric
         report["Page Version"] = pd.to_numeric(report["Page Version"], errors="coerce")
 
-        # Find the latest version number
-        report_version = report["Page Version"].max()
-
-        # Filter rows where version equals the latest
-        latest_rows = report[report["Page Version"] == report_version]
-
-        if report_version != latest_version:
-            approversWhoHaveApproved = []
-        else: 
-            approversWhoHaveApproved = list(latest_rows["Approver"])
-
-        # CALL TO ALTERNATE CHECK PAGE STATUS FUNCTION
-        # pageStatus = check_page_status(report_version, latest_version, latest_rows, quorum)
-        pageStatus = check_page_status(body_view_tree, pageId, page_log)
-        if pageStatus is None:
-            continue
-        
-        append_to_log(output_report, pageId, [pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth], True)
-
         # add comala workflow to page
-        comala_workflow_added = add_comala_workflow(page_log, pageId, quorum, AUTH)
+        comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH)
+        
         if not comala_workflow_added:
             continue
         
         # if page is approved, make approval status True
         if pageStatus == "Page Approved":
+
+            expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
+
             page_approved = approve_comala_workflow(pageId, AUTH, page_log)
             if not page_approved:
                 continue
@@ -615,9 +610,18 @@ def main(filename):
                 if not expiry_date_added:
                     continue
         else:
-            approvers_added = add_approvers(pageId, allApprovers, AUTH, page_log)
-            if not approvers_added:
+            userkeys = get_userkeys(ns, page_approval_macro, pageId, page_log)
+            print(userkeys)
+            if userkeys is None:
                 continue
+            
+            # approvers message is a string telling us whether all approvers are active or not
+            allApprovers, PageApproversCount, user_cache, inactive_set, approvers_message = get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH)
+
+            if len(allApprovers) > 0:
+                approvers_added = add_approvers(pageId, allApprovers, AUTH, page_log)
+                if not approvers_added:
+                    continue
 
 
         append_to_log(page_log, pageId, ["Success", "Page processed successfully, " + approvers_message])
