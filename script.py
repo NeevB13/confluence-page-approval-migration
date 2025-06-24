@@ -379,10 +379,6 @@ def add_comala_workflow(page_log, pageId, quorum, AUTH):
     }
 
     # print("payload: ", payload)
-    
-    # # TODO: GET RID OF THIS, ONLY FOR TESTING
-    # delete_url = f"https://your-confluence-site/rest/cw/1/page/{pageId}"
-    # delete_response = requests.delete(delete_url, headers=headers, auth=AUTH, verify=False)
 
     # Attach the workflow to the page
     response = requests.put(apply_workflow_url, headers=headers, auth=AUTH, json=payload, verify=False)
@@ -526,6 +522,9 @@ def main(filename):
             else:
                 append_to_log(page_log, pageId, ["Failed", f"{response.status_code}: page not processed"])
             continue # do not go through rest of process
+        
+        # attach the page approval report to the page
+        attach_approval_report(pageId, page_log, AUTH)
 
         # check if there is already a comala workflow on the page
         is_comala_workflow = check_comala_workflow(pageId, AUTH, page_log)
@@ -564,9 +563,6 @@ def main(filename):
 
         expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
         
-        # attach the page approval report to the page
-        # TODO: UNCOMMENT THIS LINE TO ACTUALLY ATTACH THE REPORT
-        attach_approval_report(pageId, page_log, AUTH)
 
         report = get_page_approval_report(pageId, page_log, AUTH)
         if report is None:
@@ -593,9 +589,6 @@ def main(filename):
         pageStatus = check_page_status(body_view_tree, pageId, page_log)
         if pageStatus is None:
             continue
-        
-        # print("Page status:", pageStatus)
-        #TODO: get page status from body export view
         
         append_to_log(output_report, pageId, [pageStatus, PageApproversCount, quorum, allApprovers,  approversWhoHaveApproved, expireAfter, expiryDay, expiryMonth], True)
 
