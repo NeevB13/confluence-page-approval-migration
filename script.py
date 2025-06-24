@@ -119,7 +119,6 @@ def get_userkeys(ns, page_approval_macro, pageId, page_log):
         append_to_log(page_log, pageId, ["Failed", "User keys could not be extracted from user elements"])
         return None
     
-    print(userkeys)
     return userkeys
 
 def get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH):
@@ -265,8 +264,6 @@ def get_latest_approval_date(df):
         errors='coerce'
     )
 
-    print("parsed date:", df['Approval Date Parsed'])
-
     # Get the latest date
     latest_date = df['Approval Date Parsed'].max()
 
@@ -282,9 +279,6 @@ def get_expire_after(report, expireAfter):
         'month':  30.44 * 24 * 60 * 60 * 1000,   # average month
         'year':   365.25 * 24 * 60 * 60 * 1000   # average year
     }
-
-
-    print("report:", report)
 
     quantity, unit = expireAfter.lower().strip().split()
     quantity = int(quantity)
