@@ -589,6 +589,7 @@ def main(filename):
         if not comala_workflow_added:
             continue
         
+        approvers_message = ""
         # if page is approved, make approval status True
         if pageStatus == "Page Approved":
 
