@@ -119,13 +119,18 @@ def get_userkeys(ns, page_approval_macro, pageId, page_log):
         append_to_log(page_log, pageId, ["Failed", "User keys could not be extracted from user elements"])
         return None
     
+    print(userkeys)
     return userkeys
 
-def get_allApprovers(ns, userkeys, user_cache, AUTH):
+def get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH):
+    numApprovers = len(userkeys)
     # final list of page approvers
     allApprovers = []
     for userkey in userkeys:
         # check if userkey is in cache
+        if userkey in inactive_set:
+            continue
+
         if userkey in user_cache:
             username = user_cache[userkey]
 
@@ -136,6 +141,14 @@ def get_allApprovers(ns, userkeys, user_cache, AUTH):
 
             if response.status_code == 200:
                 user_data = response.json()
+
+                display_name = user_data.get("displayName", "")
+                
+                # Check for "Unknown User"
+                if display_name.startswith("Unknown User"):
+                    inactive_set.add(userkey)
+                    continue
+
                 username = user_data.get("username", "Unknown User")
                 user_cache[userkey] = username
 
@@ -145,7 +158,14 @@ def get_allApprovers(ns, userkeys, user_cache, AUTH):
     # get total approvers on macro to check later
     PageApproversCount = len(allApprovers)
 
-    return allApprovers, PageApproversCount, user_cache
+    if len(allApprovers) == numApprovers:
+        approvers_message = "all approvers are active"
+    elif len(allApprovers) == 0:
+        approvers_message = "no approvers are active"
+    else:
+        approvers_message = f"{len(allApprovers)} out of {numApprovers} approvers are active"
+
+    return allApprovers, PageApproversCount, user_cache, inactive_set, approvers_message  
 
 def get_quorum(ns, PageApproversCount, page_approval_macro):
     # check if page approval macro has quorum
@@ -487,6 +507,9 @@ def main(filename):
     # cache to store user id and username mappings
     user_cache = {}
 
+    # set to store inactive users
+    inactive_set = set()
+
     for pageId in pageIds:
         print(f"Processing page ID: {pageId}")
 
@@ -539,8 +562,9 @@ def main(filename):
         userkeys = get_userkeys(ns, page_approval_macro, pageId, page_log)
         if userkeys is None:
             continue
-
-        allApprovers, PageApproversCount, user_cache = get_allApprovers(ns, userkeys, user_cache, AUTH)
+        
+        # approvers message is a string telling us whether all approvers are active or not
+        allApprovers, PageApproversCount, user_cache, inactive_set, approvers_message = get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH)
 
         quorum = get_quorum(ns, PageApproversCount, page_approval_macro)
 
@@ -609,7 +633,7 @@ def main(filename):
                 continue
 
 
-        append_to_log(page_log, pageId, ["Success", "Page processed successfully"])
+        append_to_log(page_log, pageId, ["Success", "Page processed successfully, " + approvers_message])
 
 
 if len(sys.argv) != 2:
