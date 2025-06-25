@@ -159,10 +159,10 @@ def get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH):
     # get total approvers on macro to check later
     PageApproversCount = len(allApprovers)
 
-    if len(allApprovers) == numApprovers:
-        approvers_message = ", all approvers are active"
-    elif len(allApprovers) == 0:
+    if len(allApprovers) == 0:
         approvers_message = ", no approvers are active"
+    elif len(allApprovers) == numApprovers:
+        approvers_message = ", all approvers are active"
     else:
         approvers_message = f", {len(allApprovers)} out of {numApprovers} approvers are active"
 
