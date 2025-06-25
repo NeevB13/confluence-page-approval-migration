@@ -12,7 +12,8 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-baseURL = "http://psdca20l.unix.anz:8094"
+baseURL = "https://confluence.service.anz"
+# baseURL = "http://psdca20l.unix.anz:8094"
 
 def initialise_log():
     """
@@ -160,11 +161,11 @@ def get_allApprovers(ns, userkeys, user_cache, inactive_set, AUTH):
     PageApproversCount = len(allApprovers)
 
     if len(allApprovers) == numApprovers:
-        approvers_message = "all approvers are active"
+        approvers_message = ", all approvers are active"
     elif len(allApprovers) == 0:
-        approvers_message = "no approvers are active"
+        approvers_message = ", no approvers are active"
     else:
-        approvers_message = f"{len(allApprovers)} out of {numApprovers} approvers are active"
+        approvers_message = f", {len(allApprovers)} out of {numApprovers} approvers are active"
 
     return allApprovers, PageApproversCount, user_cache, inactive_set, approvers_message  
 
@@ -288,6 +289,7 @@ def get_expire_after(report, expireAfter):
 
     if unit not in unit_to_ms:
         return 0000000000000  # Invalid unit, return a placeholder
+
     
     # the number of milliseconds to add to the current time
     offset = quantity * unit_to_ms[unit]
@@ -295,7 +297,8 @@ def get_expire_after(report, expireAfter):
     latest_date = get_latest_approval_date(report)  # Get the latest approval date from the report
     
 
-    if not latest_date:
+    # check if date is invalid
+    if not latest_date or latest_date is pd.NaT or pd.isna(latest_date):
         return 0000000000000
     
     # convert date to datetime
@@ -353,8 +356,11 @@ def add_comala_workflow(page_log, pageId, AUTH):
         {{description}}
             {{The Simple Approval Workflow has 2 states - Not Approved and Approved.}}
         {{description}}
+        {{workflowparameter:quorum|edit=true}}
+            1
+        {{workflowparameter}}
         {{state:Not Approved|approved=Approved|colour=#ffab00|taskable=true}}
-            {{approval:Review|assignable=true}}
+            {{approval:Review|assignable=true|minimum=@quorum}}
         {{state}}
         {{state:Approved|expired=Not Approved|final=true|changeduedate=true|updated=Not Approved}}
         {{state}}
@@ -475,6 +481,78 @@ def add_expiry_date(pageId, expiry_date, AUTH, page_log):
     
     return True
 
+def apply_quorum(pageId, quorum, AUTH, page_log):
+    parametersURL = f"{baseURL}/rest/cw/1/content/{pageId}/parameters"
+
+    # get the parameters for the page to get the parameter ID for quorum
+    getResponse = requests.get(parametersURL, headers={"X-Atlassian-Token": "no-check"}, auth=AUTH, verify=False)
+
+    if getResponse.status_code != 200:
+        return ", Could not get quorum parameter for page"
+    
+    # get the parameter ID for quorum
+
+    param_id = None
+    for param in getResponse.json().get("workflowParameters", []):
+        if param.get("name") == "quorum":
+            param_id = param.get("id")
+            break
+
+
+    payload = {
+        param_id: str(quorum)
+    }
+
+    putResponse = requests.put(parametersURL, headers={"X-Atlassian-Token": "no-check"}, auth=AUTH, json=payload, verify=False)
+
+    if putResponse.status_code != 200 and putResponse.status_code != 201:
+        return ", Failed to apply quorum to page."
+    
+    return ", Quorum applied to page successfully."
+
+def add_comment_to_page(page_id, apiAuth):
+    """
+    Adds a comment to a Confluence page indicating that it was modified.
+
+    Args:
+        page_id (str): The ID of the Confluence page.
+        apiAuth (HTTPBasicAuth): The authentication object for API requests.
+        page_log (str): The log file for page updates.
+
+    Returns:
+        str: A message indicating the result of the operation.
+    """
+    url = f"https://confluence.service.anz/rest/api/content"
+
+    data = {
+        "type": "comment",
+        "container": {
+            "id": page_id,
+            "type": "page"
+        },
+        "body": {
+            "storage": {
+                # TODO: Change comment message
+                "value": "COMMMENT MESSAGE",
+                "representation": "storage"
+            }
+        }
+    }
+
+    response = requests.post(
+        url,
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(data),
+        auth=apiAuth,
+        verify=False
+    )
+
+
+    if response.status_code == 200 or response.status_code == 201:
+        return ", Comment added successfully"
+    else:
+        return f", Failed to add comment: {response.status_code}"
+
 
 def main(filename):
 
@@ -527,8 +605,6 @@ def main(filename):
         body_view = data["body"]["export_view"]["value"]
         latest_version = data["version"]["number"]
 
-       
-
         # Creates an etree parser
         parser = etree.XMLParser(recover=True)
 
@@ -547,6 +623,8 @@ def main(filename):
         
         # attach the page approval report to the page
         attach_approval_report(pageId, page_log, AUTH)
+
+        comment_message = add_comment_to_page(pageId, AUTH)
 
         # check if there is already a comala workflow on the page
         is_comala_workflow = check_comala_workflow(pageId, AUTH, page_log)
@@ -589,6 +667,11 @@ def main(filename):
         if not comala_workflow_added:
             continue
         
+        # TODO: Uncomment this to make the logic work
+        # if quorum > 1:
+        quorum_message = apply_quorum(pageId, quorum, AUTH, page_log)
+        
+
         approvers_message = ""
         # if page is approved, make approval status True
         if pageStatus == "Page Approved":
@@ -612,7 +695,7 @@ def main(filename):
                     continue
         else:
             userkeys = get_userkeys(ns, page_approval_macro, pageId, page_log)
-            print(userkeys)
+            # print(userkeys)
             if userkeys is None:
                 continue
             
@@ -625,7 +708,7 @@ def main(filename):
                     continue
 
 
-        append_to_log(page_log, pageId, ["Success", "Page processed successfully, " + approvers_message])
+        append_to_log(page_log, pageId, ["Success", "Page processed successfully " + approvers_message + quorum_message + comment_message])
 
 
 if len(sys.argv) != 2:
