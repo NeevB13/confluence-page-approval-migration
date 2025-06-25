@@ -21,11 +21,9 @@ def initialise_log():
     # Create csv for pages
     startTimestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     page_log = f"page_log_{startTimestamp}.csv"
-    output_report = f"output_report_{startTimestamp}.csv"
 
     LOG_DEFS = {
          page_log : ["timestamp", "url", "pageId", "status", "comment"],
-         output_report : ["pageId", "url", "pageStatus", "pageApproversCount", "quorum", "allApprovers",  "approversWhoHaveApproved", "expireAfter", "expiryDay", "expiryMonth"]
     }
 
     for filename, headers in LOG_DEFS.items():
@@ -33,7 +31,7 @@ def initialise_log():
             writer = csv.writer(f)
             writer.writerow(headers)
     
-    return page_log, output_report
+    return page_log
 
 def append_to_log(filename, pageId, data, is_output_report=False):
     """
@@ -106,8 +104,8 @@ def get_userkeys(ns, page_approval_macro, pageId, page_log):
     # get users parameter in the macro
     users_param = page_approval_macro.xpath('.//ac:parameter[@ac:name="users"]', namespaces=ns)
     if not len(users_param):
-        append_to_log(page_log, pageId, ["Failed", "Users parameter not found in page approval macro"])
-        return None
+        # append_to_log(page_log, pageId, ["Failed", "Users parameter not found in page approval macro"])
+        return []
 
     users_param = users_param[0]  # get the first (and only) parameter element
 
@@ -174,7 +172,12 @@ def get_quorum(ns, page_approval_macro):
     quorum_elem = page_approval_macro.xpath('.//ac:parameter[@ac:name="quorum"]', namespaces=ns)
     # set quorum to all approvers if not set in macro, else get the quorum value
     quorum = 1 if not len(quorum_elem) else int(quorum_elem[0].text)
-    return quorum
+
+    if type(quorum) is not int or quorum <= 1:
+        return 1
+    else:
+        return quorum
+
 
 def get_page_approval_report(pageId, page_log, AUTH):
 
@@ -347,8 +350,11 @@ def get_expiry_date(expiry_month, expiry_day, expireAfter, report, pageId, pageS
     # in the case that there are no valid configs
     return None
 
-def add_comala_workflow(page_log, pageId, AUTH):
-
+def add_comala_workflow(page_log, pageId, AUTH, quorum=1):
+    if quorum <= 1:
+        quorum_markup = ""
+    else:
+        quorum_markup = f"|minimum={quorum}"
         
     # markup to apply comala workflow
     markup = f"""
@@ -356,13 +362,10 @@ def add_comala_workflow(page_log, pageId, AUTH):
         {{description}}
             {{The Simple Approval Workflow has 2 states - Not Approved and Approved.}}
         {{description}}
-        {{workflowparameter:quorum|edit=true}}
-            1
-        {{workflowparameter}}
         {{state:Not Approved|approved=Approved|colour=#ffab00|taskable=true}}
-            {{approval:Review|assignable=true|minimum=@quorum}}
+            {{approval:Review|assignable=true{quorum_markup}}}
         {{state}}
-        {{state:Approved|expired=Not Approved|final=true|changeduedate=true|updated=Not Approved}}
+        {{state:Approved|changeduedate=true|expired=Not Approved|final=true|updated=Not Approved}}
         {{state}}
     {{workflow}}
     """
@@ -429,16 +432,12 @@ def approve_comala_workflow(pageId, AUTH, page_log):
         "X-Atlassian-Token": "no-check"
     }
 
-    # check_url = f"{baseURL}/rest/cw/1/content/{pageId}/status?expand=states,approvals"
-    # check_response = requests.get(check_url, headers=headers, auth=AUTH, verify=False)
-
-    # print(check_response.json())
 
 
     response = requests.put(url, headers=headers, auth = AUTH, json=body, verify=False)
     
     if response.status_code != 200 and response.status_code != 201:
-        append_to_log(page_log, pageId, ["Failed", f"Could not approve Comala workflow, Error {response.status_code}: {response.text}"])
+        append_to_log(page_log, pageId, ["Failed", f"Could not approve Comala workflow, Error {response.status_code}"])
         return False
     # print(f"Workflow for page {pageId} approved successfully.")
     return True
@@ -559,7 +558,7 @@ def main(filename):
     username, password = get_credentials()
     AUTH = HTTPBasicAuth(username, password)
 
-    page_log, output_report = initialise_log()
+    page_log  = initialise_log()
 
     # List of page IDs to check
     with open(filename, "r") as file:
@@ -579,8 +578,6 @@ def main(filename):
     for pageId in pageIds:
         print(f"Processing page ID: {pageId}")
 
-        # get the page body and the current version
-        # get_page_url = f"{baseURL}/rest/api/content/{pageId}?expand=body.storage,version"
         get_page_url = f"{baseURL}/rest/api/content/{pageId}?expand=body.export_view,body.storage,version"
         # response = requests.get(get_page_url, headers={"Accept": "application/json"}, auth=AUTH, verify=False)
         response = requests.get(get_page_url, headers={"Accept": "application/json"}, auth=AUTH, verify=False)
@@ -631,11 +628,12 @@ def main(filename):
         if is_comala_workflow:
             continue
 
+        quorum = get_quorum(ns, page_approval_macro)
+
         # add initial workflow
-        comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH)
+        comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH, quorum)
         if not comala_workflow_added:
             continue
-        
         
         # get page status initially
         pageStatus = check_page_status(body_view_tree, pageId, page_log)
@@ -649,9 +647,6 @@ def main(filename):
                 continue
 
         
-
-        quorum = get_quorum(ns, page_approval_macro)
-        
         report = get_page_approval_report(pageId, page_log, AUTH)
         if report is None:
             continue
@@ -661,26 +656,27 @@ def main(filename):
         # Ensure version column is numeric
         report["Page Version"] = pd.to_numeric(report["Page Version"], errors="coerce")
 
-        # add comala workflow to page
-        comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH)
+        # # add comala workflow to page
+        # comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH)
         
-        if not comala_workflow_added:
-            continue
+        # if not comala_workflow_added:
+        #     continue
         
         # TODO: Uncomment this to make the logic work
         # if quorum > 1:
-        quorum_message = apply_quorum(pageId, quorum, AUTH, page_log)
+        # quorum_message = apply_quorum(pageId, quorum, AUTH, page_log)
         
 
-        approvers_message = ""
+        approvers_message = ", N/A"
         # if page is approved, make approval status True
         if pageStatus == "Page Approved":
 
-            expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
 
             page_approved = approve_comala_workflow(pageId, AUTH, page_log)
             if not page_approved:
                 continue
+
+            expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
 
             expiry_date = get_expiry_date(expiryMonth, expiryDay, expireAfter, report, pageId, pageStatus, page_log)
             # None means no date, 0000000000000 means could not get date
