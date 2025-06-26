@@ -69,6 +69,8 @@ def attach_approval_report(pageId, page_log, AUTH):
 
     if response.status_code != 200 and response.status_code != 201:
         append_to_log(page_log, pageId, ["Failed", "Could not attach page approval report", f"Status code: {response.status_code}"])
+        return False
+    return True
 
 
 def check_comala_workflow(pageId, AUTH, page_log):
@@ -647,7 +649,9 @@ def main(filename):
             continue
         
         # attach the page approval report to the page
-        attach_approval_report(pageId, page_log, AUTH)
+        report_attached = attach_approval_report(pageId, page_log, AUTH)
+        if not report_attached:
+            continue
 
         comment_message = add_comment_to_page(pageId, AUTH)
 
