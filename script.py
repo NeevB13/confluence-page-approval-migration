@@ -183,10 +183,12 @@ def get_quorum(ns, page_approval_macro):
 
 
 def get_page_approval_report(pageId, page_log, AUTH):
+        
+        headers={"Accept": "application/json", "X-Atlassian-Token": "no-check"}
 
         # get all attachments for the page
         get_attachments_url = f"{baseURL}/rest/api/content/{pageId}/child/attachment"
-        response = requests.get(get_attachments_url,headers={"Accept": "application/json", "X-Atlassian-Token": "no-check"}, auth=AUTH, verify=False)
+        response = requests.get(get_attachments_url,headers=headers, auth=AUTH, verify=False)
 
         # if status code is not 200, log the error and continue
         if response.status_code != 200:
@@ -217,7 +219,7 @@ def get_page_approval_report(pageId, page_log, AUTH):
         report_download_url = f"{baseURL}/download/attachments/{pageId}/{latest_report_name}"
         # report_download_url = f"{baseURL}/download/attachments/3704357336/PA_3704357336_29-05-2025_15-42-03_1748497323105.csv"
 
-        response = requests.get(report_download_url, auth=AUTH, verify=False)
+        response = requests.get(report_download_url, headers=headers, auth=AUTH, verify=False)
         if response.status_code != 200:
             append_to_log(page_log, pageId, ["Failed", f"Failed to download report with status code {response.status_code}"])
             return None
@@ -562,7 +564,13 @@ def add_comment_to_page(page_id, apiAuth):
         "body": {
             "storage": {
                 # TODO: Change comment message
-                "value": "COMMENT MESSAGE",
+                "value": """The Page Approval macro used on this page will no longer be supported following the migration to Confluence Cloud. To preserve historical approval data, a file named PA_PageID_DD-MM-YYYY_Timestamp.csv has been attached to this page.
+If the page did not have an existing Comala workflow, we have attached a new Comala Workflow and retained:
+The current Page status and Quorum value
+Assigned active Approvers (for ‘Not Approved’ pages)
+The Expiry date (if applicable, for ‘Approved’ pages)
+All future approvals should only be managed through Comala Workflow. For any questions, please contact atlassiancloud@anz.com.
+                """,
                 "representation": "storage"
             }
         }
@@ -672,35 +680,6 @@ def main(filename):
         if pageStatus is None:
             continue
 
-        # get expiry date from body view if there is one
-        expiry_date = check_expiry_date(body_view_tree)
-        
-        # approve comala workflow if page is approved
-        if pageStatus == "Page Approved":
-            page_approved = approve_comala_workflow(pageId, AUTH, page_log)
-            if not page_approved:
-                continue
-
-        
-        report = get_page_approval_report(pageId, page_log, AUTH)
-        if report is None:
-            continue
-
-        # print("Report:\n", report)  # Just to test
-
-        # Ensure version column is numeric
-        report["Page Version"] = pd.to_numeric(report["Page Version"], errors="coerce")
-
-        # # add comala workflow to page
-        # comala_workflow_added = add_comala_workflow(page_log, pageId, AUTH)
-        
-        # if not comala_workflow_added:
-        #     continue
-        
-        # TODO: Uncomment this to make the logic work
-        # if quorum > 1:
-        
-
         approvers_message = ", N/A"
         # if page is approved, make approval status True
         if pageStatus == "Page Approved":
@@ -708,15 +687,9 @@ def main(filename):
             page_approved = approve_comala_workflow(pageId, AUTH, page_log)
             if not page_approved:
                 continue
-
-            # expireAfter, expiryDay, expiryMonth = get_expiry(ns, page_approval_macro, pageId)
-
-            # expiry_date = get_expiry_date(expiryMonth, expiryDay, expireAfter, report, pageId, pageStatus, page_log)
-            # # None means no date, 0000000000000 means could not get date
-            # if expiry_date == 0000000000000:
-            #     # HANDLE CASE: Could not get expiry date
-            #     append_to_log(page_log, pageId, ["Failed", "Could not get expiry date"])
-            #     continue
+            
+            # get expiry date from body view if there is one
+            expiry_date = check_expiry_date(body_view_tree) 
 
             if expiry_date is not None:
                 expiry_date_added = add_expiry_date(pageId, expiry_date, AUTH, page_log)
